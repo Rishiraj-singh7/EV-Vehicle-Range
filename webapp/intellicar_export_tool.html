@@ -1,0 +1,220 @@
+<title>Intellicar CSV Export</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --text: #1a1d23;
+    --muted: #666d78;
+    --border: #d8dbe0;
+    --accent: #2563eb;
+    --accent-text: #ffffff;
+    --error: #b3261e;
+    --error-bg: #fdecea;
+    --ok-bg: #eaf6ec;
+    --ok: #1e7a34;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a;
+      --card: #1e2127;
+      --text: #e8e9ec;
+      --muted: #9aa1ac;
+      --border: #33373f;
+      --accent: #3b82f6;
+      --accent-text: #0b0d10;
+      --error: #f2b8b5;
+      --error-bg: #3a2222;
+      --ok-bg: #16321c;
+      --ok: #8bd99a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    padding: 24px;
+  }
+  form {
+    width: 100%;
+    max-width: 420px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+  }
+  h1 {
+    font-size: 1.25rem;
+    margin: 0 0 4px;
+  }
+  p.sub {
+    margin: 0 0 24px;
+    color: var(--muted);
+    font-size: 0.875rem;
+  }
+  label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin: 16px 0 6px;
+  }
+  input, select {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.95rem;
+  }
+  .row { display: flex; gap: 12px; }
+  .row > div { flex: 1; }
+  .remember {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .remember input { width: auto; }
+  button {
+    width: 100%;
+    margin-top: 22px;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  .status {
+    margin-top: 14px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 0.85rem;
+    display: none;
+  }
+  .status.error { display: block; background: var(--error-bg); color: var(--error); }
+  .status.ok { display: block; background: var(--ok-bg); color: var(--ok); }
+</style>
+
+<form id="form">
+  <h1>Intellicar CSV Export</h1>
+  <p class="sub">Pick a vehicle and month, get its CAN telemetry CSV.</p>
+
+  <label for="vehicle">Vehicle number</label>
+  <input id="vehicle" placeholder="e.g. KA51AL0298" autocomplete="off" required />
+
+  <div class="row">
+    <div>
+      <label for="month">Month</label>
+      <select id="month" required></select>
+    </div>
+    <div>
+      <label for="year">Year</label>
+      <input id="year" type="number" required />
+    </div>
+  </div>
+
+  <label for="token">Bearer token</label>
+  <input id="token" type="password" placeholder="paste token from the API login" autocomplete="off" required />
+  <div class="remember">
+    <input id="remember" type="checkbox" />
+    <label for="remember" style="margin:0; font-weight:400;">Remember token in this browser</label>
+  </div>
+
+  <button id="submit" type="submit">Download CSV</button>
+  <div id="status" class="status"></div>
+</form>
+
+<script>
+  const monthSelect = document.getElementById("month");
+  const monthNames = ["January","February","March","April","May","June",
+                       "July","August","September","October","November","December"];
+  monthNames.forEach((name, i) => {
+    const opt = document.createElement("option");
+    opt.value = i + 1;
+    opt.textContent = name;
+    monthSelect.appendChild(opt);
+  });
+
+  const now = new Date();
+  monthSelect.value = now.getMonth() + 1;
+  document.getElementById("year").value = now.getFullYear();
+
+  const tokenInput = document.getElementById("token");
+  const rememberBox = document.getElementById("remember");
+  const savedToken = localStorage.getItem("intellicar_token");
+  if (savedToken) {
+    tokenInput.value = savedToken;
+    rememberBox.checked = true;
+  }
+
+  const form = document.getElementById("form");
+  const statusEl = document.getElementById("status");
+  const submitBtn = document.getElementById("submit");
+
+  function setStatus(kind, message) {
+    statusEl.className = "status" + (kind ? " " + kind : "");
+    statusEl.textContent = message;
+  }
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    setStatus("", "");
+
+    const vehicle = document.getElementById("vehicle").value.trim();
+    const month = monthSelect.value;
+    const year = document.getElementById("year").value;
+    const token = tokenInput.value.trim();
+
+    if (rememberBox.checked) {
+      localStorage.setItem("intellicar_token", token);
+    } else {
+      localStorage.removeItem("intellicar_token");
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Downloading...";
+
+    try {
+      const url = `/download?vehicleNumber=${encodeURIComponent(vehicle)}&month=${month}&year=${year}`;
+      const resp = await fetch(url, { headers: { Authorization: token } });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        setStatus("error", `Failed (${resp.status}): ${text.slice(0, 300)}`);
+        return;
+      }
+
+      const blob = await resp.blob();
+      const disposition = resp.headers.get("Content-Disposition") || "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match ? match[1] : `${vehicle}.csv`;
+
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+
+      setStatus("ok", `Downloaded ${filename}`);
+    } catch (err) {
+      setStatus("error", "Request failed: " + err.message);
+    } finally {
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Download CSV";
+    }
+  });
+</script>

@@ -1,0 +1,14 @@
+# Pinned to the versions the model was trained and validated with.
+# scikit-learn in particular MUST match: a joblib bundle pickled by one
+# minor version can fail to load, or silently behave differently, under
+# another. If you bump this, retrain and re-run evaluate_test_set.py.
+scikit-learn==1.6.1
+pandas==2.2.3
+joblib==1.4.2
+numpy==1.26.4
+
+# Web layer (webapp/wsgi.py) and the WSGI server that runs it.
+flask==3.1.0
+
+# Production WSGI server (the bundled ThreadingHTTPServer is a dev server).
+gunicorn==23.0.0

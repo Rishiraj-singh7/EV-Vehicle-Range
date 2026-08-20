@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Secrets -- the upstream API token. Never commit; inject via
+# MILODRIVE_BEARER_TOKEN in the deploy environment instead.
+config/secrets.local.json
+
+# Raw telemetry is a regenerating API cache, not source. It is ~900 MB and
+# the deployed service does not need any of it: every lookup fetches fresh
+# from the export API into these folders. Only the folders themselves have
+# to exist, hence the .gitkeep exception below.
+data/raw/**
+!data/raw/
+!data/raw/*/
+!data/raw/**/.gitkeep
+
+# Editor/scratch leftovers
+*.bak

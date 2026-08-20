@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EV Range Dashboard</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f9f9f7;
+    --card: #fcfcfb;
+    --text: #0b0b0b;
+    --text-secondary: #52514e;
+    --muted: #898781;
+    --border: #e1e0d9;
+    --border-strong: #c3c2b7;
+    --accent: #2a78d6;
+    --accent-text: #ffffff;
+    --fast: #2a78d6;
+    --slow: #eb6834;
+    --error: #d03b3b;
+    --error-bg: #fbe9e8;
+    --ok: #0ca30c;
+    --ok-bg: #e9f7e9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0d0d;
+      --card: #1a1a19;
+      --text: #ffffff;
+      --text-secondary: #c3c2b7;
+      --muted: #898781;
+      --border: #2c2c2a;
+      --border-strong: #383835;
+      --accent: #3987e5;
+      --accent-text: #0b0b0b;
+      --fast: #3987e5;
+      --slow: #d95926;
+      --error: #e66767;
+      --error-bg: #2a1a1a;
+      --ok: #0ca30c;
+      --ok-bg: #142914;
+    }
+  }
+  :root { --gap: 20px; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 32px 16px 64px;
+  }
+  main {
+    max-width: 1180px;
+    margin: 0 auto;
+  }
+
+  /* Two columns so the range answer and the charging history are readable
+     together without scrolling: the range card is what an operator acts on,
+     the sessions table is the supporting evidence beside it.
+     align-items:start stops the short left column stretching to match the
+     tall sessions table. */
+  /* Two equal halves that start and end on the same lines. The columns are
+     flex children so the sessions panel can absorb the leftover height
+     instead of leaving a ragged bottom edge next to the shorter left column. */
+  .layout {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--gap);
+    align-items: stretch;
+  }
+  .col {
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap);
+    min-width: 0;
+  }
+  /* Spacing is owned by the column's gap, so cards carry none of their own. */
+  .layout .card { margin-bottom: 0; }
+
+  /* The sessions panel grows to match the left column, and its table gets
+     whatever height is left after the header and the fast/slow tiles. */
+  #sessionsCard, #sessionsPlaceholder { flex: 1; }
+  #sessionsCard { display: flex; flex-direction: column; }
+  #sessionsPlaceholder { display: flex; flex-direction: column; justify-content: center; }
+
+  /* Below this the two columns no longer both fit, so stack them. */
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+  }
+  h1 {
+    font-size: 1.4rem;
+    margin: 0 0 2px;
+  }
+  p.sub {
+    margin: 0 0 24px;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  label {
+    display: block;
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0 0 6px;
+  }
+  input, button {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg);
+    color: var(--text);
+    font-size: 0.95rem;
+    font-family: inherit;
+  }
+
+  .combo { position: relative; }
+  .suggestions {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    max-height: 300px;
+    overflow-y: auto;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.14);
+    z-index: 30;
+    display: none;
+  }
+  .suggestions.open { display: block; }
+  .suggestion-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 0.9rem;
+  }
+  .suggestion-item:hover, .suggestion-item.active { background: var(--bg); }
+  .suggestion-item.disabled { opacity: 0.5; }
+  .suggestion-empty {
+    padding: 14px;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  .device-readout {
+    margin-top: 10px;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    display: none;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* How much to trust this particular number. Colour-coded, but the tag
+     text carries the meaning on its own so it still reads without colour. */
+  .confidence {
+    margin-top: 14px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    border: 1px solid transparent;
+  }
+  .conf-tag {
+    flex: none;
+    font-weight: 600;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .confidence.conf-high {
+    background: rgba(22, 163, 74, 0.12);
+    border-color: rgba(22, 163, 74, 0.35);
+  }
+  .confidence.conf-high .conf-tag { background: #16a34a; color: #fff; }
+  .confidence.conf-medium {
+    background: rgba(217, 119, 6, 0.12);
+    border-color: rgba(217, 119, 6, 0.35);
+  }
+  .confidence.conf-medium .conf-tag { background: #d97706; color: #fff; }
+  .confidence.conf-low {
+    background: rgba(220, 38, 38, 0.12);
+    border-color: rgba(220, 38, 38, 0.35);
+  }
+  .confidence.conf-low .conf-tag { background: #dc2626; color: #fff; }
+  .confidence.conf-none {
+    background: rgba(100, 116, 139, 0.12);
+    border-color: rgba(100, 116, 139, 0.35);
+  }
+  .confidence.conf-none .conf-tag { background: #64748b; color: #fff; }
+
+  button#getRangeBtn {
+    margin-top: 18px;
+    background: var(--accent);
+    color: var(--accent-text);
+    border: none;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 12px;
+  }
+  button#getRangeBtn:disabled { opacity: 0.5; cursor: default; }
+
+  .banner {
+    display: none;
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 0.85rem;
+    margin-bottom: 18px;
+  }
+  .banner.error { display: block; background: var(--error-bg); color: var(--error); }
+
+  #results { display: none; }
+
+  .vehicle-heading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .vehicle-heading h2 {
+    font-size: 1.15rem;
+    margin: 0;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: var(--border);
+    color: var(--text-secondary);
+  }
+
+  .hero {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 18px 0 4px;
+  }
+  .placeholder {
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 0.88rem;
+    padding: 48px 24px;
+    border-style: dashed;
+  }
+  .placeholder p { margin: 0; }
+  .placeholder-icon { font-size: 1.6rem; opacity: 0.5; margin-bottom: 10px; }
+  .hero .value {
+    font-size: 2.6rem;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: proportional-nums;
+  }
+  .hero .unit {
+    font-size: 1rem;
+    color: var(--text-secondary);
+  }
+  .hero-label {
+    font-size: 0.78rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .meta-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
+    gap: 14px 18px;
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .meta-item .meta-value {
+    font-size: 1rem;
+    font-weight: 600;
+  }
+  .meta-item .meta-label {
+    font-size: 0.72rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .panel-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin: 0 0 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sessions-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 0 0 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sessions-header h3 {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    margin: 0;
+  }
+  .sessions-note {
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin: 0 0 16px;
+  }
+
+  .session-stats {
+    display: flex;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+  .stat-tile {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .stat-tile .dot {
+    display: inline-block;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    margin-right: 7px;
+  }
+  .stat-tile.fast .dot { background: var(--fast); }
+  .stat-tile.slow .dot { background: var(--slow); }
+  .stat-tile .count {
+    font-size: 1.6rem;
+    font-weight: 700;
+    display: block;
+    margin-top: 4px;
+  }
+  .stat-tile .label {
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+  }
+
+  .bar {
+    height: 10px;
+    border-radius: 999px;
+    overflow: hidden;
+    display: flex;
+    background: var(--border);
+    margin-bottom: 18px;
+  }
+  .bar .fast-fill { background: var(--fast); }
+  .bar .slow-fill { background: var(--slow); margin-left: 2px; }
+
+  /* Keep the card to one screen: the table scrolls inside it, with the
+     header pinned so the columns stay labelled while scrolling. */
+  .sessions-scroll {
+    flex: 1;
+    min-height: 220px;   /* keeps a few rows visible on short viewports */
+    overflow-y: auto;
+    overflow-x: auto;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+  }
+  .sessions-scroll table.sessions-table th {
+    position: sticky;
+    top: 0;
+    background: var(--card);
+    z-index: 1;
+  }
+  table.sessions-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.82rem;
+  }
+  table.sessions-table th {
+    text-align: left;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+    font-weight: 600;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  table.sessions-table td {
+    padding: 7px 8px;
+    border-bottom: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  table.sessions-table tr:last-child td { border-bottom: none; }
+  .tag {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  .tag.fast { background: color-mix(in srgb, var(--fast) 18%, transparent); color: var(--fast); }
+  .tag.slow { background: color-mix(in srgb, var(--slow) 18%, transparent); color: var(--slow); }
+
+  .footer-note {
+    text-align: center;
+    font-size: 0.78rem;
+    color: var(--muted);
+    margin-top: 8px;
+  }
+  .footer-note a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>EV Range Dashboard</h1>
+  <p class="sub">Search a vehicle number, get its predicted full-charge range and recent charging behaviour.</p>
+
+  <div class="layout">
+  <div class="col">
+
+  <div class="card">
+    <p class="panel-title">Vehicle lookup</p>
+    <label for="vehicleSearch">Vehicle number</label>
+    <div class="combo">
+      <input id="vehicleSearch" type="text" autocomplete="off" placeholder="Loading vehicles…" disabled />
+      <div id="suggestions" class="suggestions"></div>
+    </div>
+    <div id="deviceReadout" class="device-readout"></div>
+    <button id="getRangeBtn" disabled>Get range</button>
+  </div>
+
+  <div id="errorBanner" class="banner error"></div>
+
+  <div id="results" class="card">
+    <p class="panel-title">Range prediction</p>
+    <div class="vehicle-heading">
+      <h2 id="resVehicle">—</h2>
+      <span id="resBadge" class="badge">—</span>
+    </div>
+
+    <div class="hero-label">Predicted range at 100% SOC</div>
+    <div class="hero">
+      <span class="value" id="resRange">—</span>
+      <span class="unit">km</span>
+    </div>
+
+    <div id="confidenceBanner" class="confidence" style="display:none;">
+      <span id="confidenceTag" class="conf-tag">—</span>
+      <span id="confidenceNote"></span>
+    </div>
+
+    <div class="meta-row">
+      <div class="meta-item">
+        <div class="meta-value" id="resModel">—</div>
+        <div class="meta-label">Model</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-value" id="resEpochsTrained">—</div>
+        <div class="meta-label">Epochs trained on</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-value" id="resEpochsPull">—</div>
+        <div class="meta-label">Cycles for this vehicle</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-value" id="resSource">—</div>
+        <div class="meta-label">Data source</div>
+      </div>
+    </div>
+  </div>
+
+  </div><!-- /.col left -->
+
+  <div class="col">
+  <div id="sessionsPlaceholder" class="card placeholder">
+    <div class="placeholder-icon">&#9889;</div>
+    <p>Charging history will appear here once you look up a vehicle.</p>
+  </div>
+  <div id="sessionsCard" class="card" style="display:none;">
+    <div class="sessions-header">
+      <h3>Charging sessions</h3>
+      <span id="sessionsFoundLabel" class="badge">0 / 16</span>
+    </div>
+    <p class="sessions-note" id="sessionsNote"></p>
+
+    <div class="session-stats">
+      <div class="stat-tile fast">
+        <span class="label"><span class="dot"></span>Fast</span>
+        <span class="count" id="fastCount">0</span>
+      </div>
+      <div class="stat-tile slow">
+        <span class="label"><span class="dot"></span>Slow</span>
+        <span class="count" id="slowCount">0</span>
+      </div>
+    </div>
+
+    <div class="bar" id="sessionsBar">
+      <div class="fast-fill" id="fastFill" style="width:0%"></div>
+      <div class="slow-fill" id="slowFill" style="width:0%"></div>
+    </div>
+
+    <div class="sessions-scroll">
+      <table class="sessions-table">
+        <thead>
+          <tr>
+            <th>Start</th>
+            <th>SOC</th>
+            <th>Duration</th>
+            <th>Rate</th>
+            <th>Type</th>
+          </tr>
+        </thead>
+        <tbody id="sessionsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  </div><!-- /.col right -->
+  </div><!-- /.layout -->
+
+  <p class="footer-note">Manual CSV export tool: <a href="/export-tool">/export-tool</a></p>
+</main>
+
+<script>
+  const searchInput = document.getElementById("vehicleSearch");
+  const suggestionsEl = document.getElementById("suggestions");
+  const deviceReadout = document.getElementById("deviceReadout");
+  const getRangeBtn = document.getElementById("getRangeBtn");
+  const errorBanner = document.getElementById("errorBanner");
+  const results = document.getElementById("results");
+  const sessionsCard = document.getElementById("sessionsCard");
+  const sessionsPlaceholder = document.getElementById("sessionsPlaceholder");
+
+  let allVehicles = [];   // [{vehicle, device, device_label}, ...] -- loaded once
+  let filtered = [];      // current suggestion list
+  let activeIndex = -1;   // keyboard-highlighted suggestion
+  let selected = null;    // the vehicle actually picked (not just typed)
+
+  function showError(msg) {
+    errorBanner.textContent = msg;
+    errorBanner.classList.add("error");
+    errorBanner.style.display = "block";
+  }
+  function clearError() {
+    errorBanner.style.display = "none";
+    errorBanner.textContent = "";
+  }
+
+  async function loadAllVehicles() {
+    try {
+      const resp = await fetch("/api/all-vehicles");
+      const data = await resp.json();
+      allVehicles = data.vehicles;
+      searchInput.disabled = false;
+      searchInput.placeholder = `Search ${allVehicles.length} vehicles by number…`;
+    } catch (err) {
+      showError("Could not load vehicle list: " + err.message);
+    }
+  }
+
+  function closeSuggestions() {
+    suggestionsEl.classList.remove("open");
+    suggestionsEl.innerHTML = "";
+    activeIndex = -1;
+  }
+
+  function renderSuggestions() {
+    suggestionsEl.innerHTML = "";
+    if (!filtered.length) {
+      suggestionsEl.innerHTML = `<div class="suggestion-empty">No matching vehicle</div>`;
+      suggestionsEl.classList.add("open");
+      return;
+    }
+    filtered.forEach((v, i) => {
+      const isNoDevice = v.device === "no_device";
+      const row = document.createElement("div");
+      row.className = "suggestion-item"
+        + (i === activeIndex ? " active" : "")
+        + (isNoDevice ? " disabled" : "");
+      row.innerHTML = `<span>${v.vehicle}</span><span class="badge">${isNoDevice ? "No device" : v.device_label}</span>`;
+      row.addEventListener("mousedown", (e) => {
+        e.preventDefault(); // fire before the input's blur closes the list
+        selectVehicle(v);
+      });
+      suggestionsEl.appendChild(row);
+    });
+    suggestionsEl.classList.add("open");
+  }
+
+  function clearSelection() {
+    selected = null;
+    getRangeBtn.disabled = true;
+    deviceReadout.style.display = "none";
+  }
+
+  function selectVehicle(v) {
+    selected = v;
+    searchInput.value = v.vehicle;
+    closeSuggestions();
+    clearError();
+    results.style.display = "none";
+    sessionsCard.style.display = "none";
+    sessionsPlaceholder.style.display = "block";
+
+    deviceReadout.style.display = "flex";
+    if (v.device === "no_device") {
+      deviceReadout.innerHTML = `<span class="badge">No device</span><span>This vehicle has no telematics device installed.</span>`;
+      getRangeBtn.disabled = true;
+    } else {
+      deviceReadout.innerHTML = `<span>Device:</span><span class="badge">${v.device_label}</span>`;
+      getRangeBtn.disabled = false;
+    }
+  }
+
+  searchInput.addEventListener("input", () => {
+    clearSelection();
+    const q = searchInput.value.trim().toUpperCase();
+    if (!q) { closeSuggestions(); return; }
+    filtered = allVehicles.filter((v) => v.vehicle.includes(q)).slice(0, 25);
+    activeIndex = -1;
+    renderSuggestions();
+  });
+
+  searchInput.addEventListener("keydown", (e) => {
+    if (!suggestionsEl.classList.contains("open")) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      activeIndex = Math.min(activeIndex + 1, filtered.length - 1);
+      renderSuggestions();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      activeIndex = Math.max(activeIndex - 1, 0);
+      renderSuggestions();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (activeIndex >= 0 && filtered[activeIndex]) selectVehicle(filtered[activeIndex]);
+    } else if (e.key === "Escape") {
+      closeSuggestions();
+    }
+  });
+
+  searchInput.addEventListener("focus", () => {
+    if (filtered.length && searchInput.value.trim()) renderSuggestions();
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".combo")) closeSuggestions();
+  });
+
+  function fmtTime(iso) {
+    const d = new Date(iso);
+    return d.toLocaleString(undefined, {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
+    });
+  }
+
+  const CONF_LABELS = {
+    high: "Vehicle-specific",
+    medium: "Limited data",
+    low: "New vehicle",
+    none: "No data",
+  };
+
+  function renderResult(data) {
+    document.getElementById("resVehicle").textContent = data.vehicle;
+    document.getElementById("resBadge").textContent = data.device_label || data.device;
+    document.getElementById("resRange").textContent =
+      data.range_available ? data.range_km.toFixed(0) : "n/a";
+    document.getElementById("resModel").textContent = data.model_name || "—";
+    document.getElementById("resEpochsTrained").textContent =
+      data.model_trained_on_epochs != null ? data.model_trained_on_epochs : "—";
+    document.getElementById("resEpochsPull").textContent =
+      data.vehicle_epochs_in_store != null ? data.vehicle_epochs_in_store : "—";
+    document.getElementById("resSource").textContent = data.data_source;
+
+    // A prediction for a vehicle the model never trained on is a materially
+    // weaker claim than one for a known vehicle -- it leans on device type
+    // and driving pattern alone and reads low on long-range vehicles. Say so
+    // rather than presenting both with the same authority.
+    const banner = document.getElementById("confidenceBanner");
+    const conf = data.confidence || "none";
+    banner.style.display = "flex";
+    banner.className = "confidence conf-" + conf;
+    document.getElementById("confidenceTag").textContent = CONF_LABELS[conf] || conf;
+    document.getElementById("confidenceNote").textContent = data.confidence_note || "";
+
+    results.style.display = "block";
+
+    const cs = data.charging_sessions;
+    document.getElementById("sessionsFoundLabel").textContent =
+      `${cs.sessions_found} / ${cs.requested}`;
+    document.getElementById("sessionsNote").textContent =
+      cs.note + (cs.classification_source ? ` Source: ${cs.classification_source}.` : "");
+    document.getElementById("fastCount").textContent = cs.fast;
+    document.getElementById("slowCount").textContent = cs.slow;
+
+    const total = cs.fast + cs.slow;
+    const fastPct = total ? (cs.fast / total) * 100 : 0;
+    const slowPct = total ? (cs.slow / total) * 100 : 0;
+    document.getElementById("fastFill").style.width = fastPct + "%";
+    document.getElementById("slowFill").style.width = slowPct + "%";
+
+    const body = document.getElementById("sessionsBody");
+    body.innerHTML = "";
+    for (const s of [...cs.sessions].reverse()) {
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td>${fmtTime(s.start)}</td>
+        <td>${s.soc_start.toFixed(0)}% → ${s.soc_end.toFixed(0)}%</td>
+        <td>${s.duration_hours.toFixed(1)} h</td>
+        <td>${s.rate_pct_per_hour.toFixed(1)} %/h</td>
+        <td><span class="tag ${s.is_fast ? "fast" : "slow"}">${s.is_fast ? "Fast" : "Slow"}</span></td>
+      `;
+      body.appendChild(tr);
+    }
+    sessionsCard.style.display = "block";
+    sessionsPlaceholder.style.display = "none";
+  }
+
+  getRangeBtn.addEventListener("click", async () => {
+    clearError();
+    results.style.display = "none";
+    sessionsCard.style.display = "none";
+    sessionsPlaceholder.style.display = "block";
+    if (!selected) return;
+    const { vehicle, device } = selected;
+
+    getRangeBtn.disabled = true;
+    getRangeBtn.textContent = "Fetching…";
+    try {
+      const resp = await fetch(
+        `/api/range?device=${encodeURIComponent(device)}&vehicle=${encodeURIComponent(vehicle)}`
+      );
+      const data = await resp.json();
+      if (!resp.ok) {
+        showError(data.error || "Request failed");
+        return;
+      }
+      renderResult(data);
+    } catch (err) {
+      showError("Request failed: " + err.message);
+    } finally {
+      getRangeBtn.disabled = false;
+      getRangeBtn.textContent = "Get range";
+    }
+  });
+
+  loadAllVehicles();
+</script>
+</body>
+</html>

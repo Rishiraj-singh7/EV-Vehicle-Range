@@ -1,0 +1,34 @@
+# Render blueprint. Import the repo on Render and it reads this.
+#
+# --workers 1 is deliberate, not a placeholder: the central epoch store is a
+# CSV with no locking (src/common/central_store.py), so two workers can have
+# one overwrite the other's additions. It also keeps memory well inside the
+# 512 MB tier -- one worker peaks around 320 MB while parsing a large pull.
+#
+# --timeout 300 is also deliberate: a 30-day Intellicar pull can take
+# minutes, and gunicorn's 30 s default would kill the request mid-fetch.
+services:
+  - type: web
+    name: ev-range-dashboard
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 300 webapp.wsgi:app
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # All three are secrets -- set them in the Render dashboard, never here.
+      - key: MILODRIVE_BEARER_TOKEN
+        sync: false
+      - key: DASHBOARD_USER
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+    # The central store lives on disk. Without this it resets on every
+    # deploy and restart, losing accumulated epochs (they re-fetch on the
+    # next lookup, but every vehicle goes cold again).
+    disk:
+      name: data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1
